@@ -229,7 +229,7 @@ final class TypeParser {
 
 	/**
 	 * Finds the ':' ending a type name starting at {@code from}, skipping colons nested in
-	 * template argument lists (e.g. {@code con_map<a,b>::Entry}).
+	 * template argument lists (e.g. {@code Map<a,b>::Entry}).
 	 */
 	private int findNameEnd(int from) {
 		int colon = s.indexOf(':', from);
@@ -698,7 +698,7 @@ final class TypeParser {
 
 	/**
 	 * Nested classes are named without their enclosing class ({@code Entry}), but g++ spells
-	 * out the qualified class ({@code Q2t7con_map2ZiZi5Entry}) at the start of the argtypes.
+	 * out the qualified class ({@code Q2t3Map2ZiZi5Entry}) at the start of the argtypes.
 	 */
 	private static boolean startsWithOwnQualifiedName(String argtypes, String tagName) {
 		if (!argtypes.startsWith("Q")) {

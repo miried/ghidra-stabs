@@ -21,32 +21,32 @@ class GnuV2NamesTest {
 
 	@Test
 	void constructorsAndDestructors() {
-		assertTrue(GnuV2Names.isConstructor("__8Listener"));
-		assertTrue(GnuV2Names.isConstructor("__t9Container1Z13emittertime_t"));
-		assertFalse(GnuV2Names.isConstructor("__as__8ListenerRC8Listener"));
-		assertTrue(GnuV2Names.isDestructor("_._8Listener"));
-		assertFalse(GnuV2Names.isDestructor("Remove__8ListenerP14Event_CGAMEDLL"));
+		assertTrue(GnuV2Names.isConstructor("__6Widget"));
+		assertTrue(GnuV2Names.isConstructor("__t9Container1Z6item_t"));
+		assertFalse(GnuV2Names.isConstructor("__as__6WidgetRC6Widget"));
+		assertTrue(GnuV2Names.isDestructor("_._6Widget"));
+		assertFalse(GnuV2Names.isDestructor("Remove__6WidgetP5Event"));
 	}
 
 	@Test
 	void freeFunctions() {
-		assertEquals("FindBeamList", GnuV2Names.freeFunctionName("FindBeamList__Fi"));
-		assertEquals("CG_Subdivide",
-			GnuV2Names.freeFunctionName("CG_Subdivide__FG6VectorN20R6VectorN23"));
+		assertEquals("FindItem", GnuV2Names.freeFunctionName("FindItem__Fi"));
+		assertEquals("Subdivide",
+			GnuV2Names.freeFunctionName("Subdivide__FG6VectorN20R6VectorN23"));
 		assertEquals("operator<<", GnuV2Names.freeFunctionName("__ls__FR7ostreamPCc"));
 		assertEquals("operator+", GnuV2Names.freeFunctionName("__pl__FRC3strf"));
-		assertNull(GnuV2Names.freeFunctionName("CG_MultiBeamBegin"));
+		assertNull(GnuV2Names.freeFunctionName("BeginFrame"));
 	}
 
 	@Test
 	void classOfPhysname() {
-		assertEquals("8Listener", GnuV2Names.classOfPhysname("__as__8ListenerRC8Listener", "__as"));
-		assertEquals("8Listener", GnuV2Names.classOfPhysname("_._8Listener", "Listener"));
-		assertEquals("t9Container1Z13emittertime_t", GnuV2Names.classOfPhysname(
-			"__t9Container1Z13emittertime_tRCt9Container1Z13emittertime_t", "Container"));
+		assertEquals("6Widget", GnuV2Names.classOfPhysname("__as__6WidgetRC6Widget", "__as"));
+		assertEquals("6Widget", GnuV2Names.classOfPhysname("_._6Widget", "Widget"));
+		assertEquals("t9Container1Z6item_t", GnuV2Names.classOfPhysname(
+			"__t9Container1Z6item_tRCt9Container1Z6item_t", "Container"));
 		assertEquals("t3Foo1Zi", GnuV2Names.classOfPhysname("size__Ct3Foo1Zi", "size"));
-		String block = "Q2t14MEM_BlockAlloc2ZQ2t7con_set2ZP14Event_CGAMEDLLZQ2t7con_map2Z" +
-			"P14Event_CGAMEDLLZ8EventDef5Entry5EntryZA255_c7block_s";
+		String block = "Q2t10BlockAlloc2ZQ2t3Set2ZP5EventZQ2t3Map2ZP5EventZ3Def5Entry5Entry" +
+			"ZA255_c7block_s";
 		assertEquals(block, GnuV2Names.classOfPhysname("__as__" + block + "RC" + block, "__as"));
 
 		List<String> parts = GnuV2Names.qualifiedComponents(block);
@@ -59,8 +59,8 @@ class GnuV2NamesTest {
 
 	@Test
 	void splitQualified() {
-		assertEquals(List.of("con_set<K,con_map<K,V>::Entry>", "Entry"),
-			GnuV2Names.splitQualified("con_set<K,con_map<K,V>::Entry>::Entry"));
+		assertEquals(List.of("Set<K,Map<K,V>::Entry>", "Entry"),
+			GnuV2Names.splitQualified("Set<K,Map<K,V>::Entry>::Entry"));
 		assertEquals(List.of("Entry"), GnuV2Names.splitQualified("Entry"));
 	}
 }

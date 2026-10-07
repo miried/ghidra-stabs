@@ -4,3 +4,4 @@ dist/
 bin/
 lib/*.jar
 CLAUDE.local.md
+local.properties

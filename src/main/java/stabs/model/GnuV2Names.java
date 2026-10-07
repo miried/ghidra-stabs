@@ -69,7 +69,7 @@ public final class GnuV2Names {
 
 	/**
 	 * Returns the unqualified source name of a free (non-member) function from its mangled
-	 * name, e.g. {@code FindBeamList} for {@code FindBeamList__Fi} and {@code operator<<} for
+	 * name, e.g. {@code FindItem} for {@code FindItem__Fi} and {@code operator<<} for
 	 * {@code __ls__FR7ostreamPCc}.
 	 *
 	 * @return the name, or null if it does not look like a mangled free function
@@ -92,7 +92,7 @@ public final class GnuV2Names {
 	}
 
 	/**
-	 * Splits a qualified source name such as {@code con_set<K,con_map<K,V>::Entry>::Entry} at
+	 * Splits a qualified source name such as {@code Set<K,Map<K,V>::Entry>::Entry} at
 	 * the {@code ::} separators outside template arguments.
 	 */
 	public static List<String> splitQualified(String name) {
@@ -119,7 +119,7 @@ public final class GnuV2Names {
 
 	/**
 	 * Returns the mangled class part of a member function's physname, e.g.
-	 * {@code Q2t7con_map2ZiZi5Entry} for {@code __as__Q2t7con_map2ZiZi5EntryRCQ2...}.
+	 * {@code Q2t3Map2ZiZi5Entry} for {@code __as__Q2t3Map2ZiZi5EntryRCQ2...}.
 	 *
 	 * @param method the method's name as given in the STABS ({@code __as}, {@code Entry})
 	 * @return the class mangling, or null if the physname does not have the expected shape

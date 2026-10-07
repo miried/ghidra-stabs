@@ -67,7 +67,7 @@ public final class HeadlessImport {
 
 			for (int i = 1; i < args.length; i++) {
 				String q = args[i];
-				// nested classes live in subcategories (/STABS/con_set<...>/Entry)
+				// nested classes live in subcategories (/STABS/Set<...>/Entry)
 				for (Iterator<DataType> it = dtm.getAllDataTypes(); it.hasNext();) {
 					DataType dt = it.next();
 					if (dt.getName().equals(q) &&

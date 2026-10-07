@@ -1,12 +1,12 @@
 # Ghidra 12.1.4: GCC Exception Handlers applies the image base twice
 
-Not fixed locally. The installed Ghidra (Homebrew 12.1.4) still has the bug. The workaround is to
-disable **GCC Exception Handlers** in the analysis options before analyzing the mohaa binaries.
+Ghidra 12.1.4 has this bug. The workaround is to disable **GCC Exception Handlers** in the
+analysis options before analyzing relocated gcc 2.95 `.so` files.
 
 ## Symptom
 
-In `cgame.so`, "Non-Returning Functions - Discovered" marks 22 functions noreturn (`rand`,
-`strcpy`, `sprintf`, `AnglesToAxis`, ...). The decompiler then cuts off every caller after
+In an affected `.so`, "Non-Returning Functions - Discovered" marks ordinary functions noreturn
+(`rand`, `strcpy`, `sprintf`, ...). The decompiler then cuts off every caller after
 such a call, and code after it isn't part of the function. That also costs STABS register
 locals: their blocks are no longer in the function body (`no write` skips).
 
@@ -15,16 +15,16 @@ The marks are the same with and without the STABS analyzer.
 ## Cause
 
 `.eh_frame` FDE `pc_begin` fields are `DW_EH_PE_absptr` and each one has an `R_386_RELATIVE`
-relocation in `.rel.eh_frame` (1515 of them in cgame). The `.so` is linked at 0 and Ghidra loads it
+relocation in `.rel.eh_frame`. The `.so` is linked at 0 and Ghidra loads it
 at 0x10000, so the ELF loader writes `0x10000 + addend` into memory, which is correct.
 
-The FDE at 0xd7070 (link-time 0xc7070) shows what happens next:
+One FDE shows what happens next:
 
 | | value |
 |---|---|
 | file bytes (REL addend) | 0x88b64 |
-| memory after the loader's relocation | 0x98b64, which is `b_malloc` (`win32/win_bounds.cpp`) |
-| reference created by GCC Exception Handlers | 0xa8b64, inside `CG_ParseServerinfo` |
+| memory after the loader's relocation | 0x98b64, a function start (correct) |
+| reference created by GCC Exception Handlers | 0xa8b64, inside an unrelated function |
 
 `ghidra/app/plugin/exceptionhandlers/gcc/AbstractDwarfEHDecoder.java` in 12.1.4
 (`Ghidra/Features/Base/lib/Base-src.zip`), `resolveRelativeOffset`:
@@ -38,14 +38,15 @@ case DW_EH_PE_absptr:
 `getImageBaseAdjustment()` is `imageBase - ElfLoader.getElfOriginalImageBase()` = 0x10000. It is
 added to the value read from memory, which the relocation has already moved.
 
-The analyzer creates a function at every such address. These are about 1000 bogus functions, most
+The analyzer creates a function at every such address. In one test binary that was about 1000 bogus
+functions, most
 of them starting mid-instruction or mid-function. FindNoReturnFunctionsAnalyzer then sees
 "function defined after call" / "function defined in instruction after call" behind real
 calls and takes that as evidence that the callee doesn't return.
 
 ## Measured (headless, `./gradlew fullAnalysis`)
 
-| cgame.so, full auto analysis | GCC Exception Handlers on | off |
+| test `.so`, full auto analysis | GCC Exception Handlers on | off |
 |---|---|---|
 | functions | 2480 | 1482 |
 | functions marked noreturn | 22 | 2 (both `abort`) |
@@ -64,7 +65,7 @@ at which call (`NoReturnReasons` in `src/test`).
 
 ## Upstream
 
-Ghidra master (`~/code/ghidra`, checked 2026-10-08) moved the adjustment into `decodeAddress`.
+Ghidra master (checked 2026-10-08) moved the adjustment into `decodeAddress`.
 It now only applies it when there is no relocation at the decoded field:
 
 ```java
@@ -75,8 +76,8 @@ if (appMode == DwarfEHDataApplicationMode.DW_EH_PE_absptr &&
 ```
 
 `resolveRelativeOffset` no longer adjusts `absptr`. That should fix this case, because every
-`pc_begin` here has a relocation. It is untested here. The local clone is shallow, so the commit
-that changed this couldn't be identified.
+`pc_begin` here has a relocation. It is untested here, and the commit that changed this
+hasn't been identified.
 
 g++ 2.95's exception tables aren't something this analyzer understands anyway, so disabling it
 loses nothing on these binaries.

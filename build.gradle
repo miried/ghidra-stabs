@@ -1,11 +1,24 @@
 // Builds the STABS Ghidra extension against a local Ghidra installation.
 //
-// GHIDRA_INSTALL_DIR is taken from the environment, then from -PGHIDRA_INSTALL_DIR,
-// and defaults to the Homebrew install.
+// Machine-specific settings come from the environment, -P properties or an optional,
+// untracked local.properties next to this file:
+//   GHIDRA_INSTALL_DIR   the Ghidra 12.1.4 installation (required)
+//   stabs.file           default ELF for dumpStabs/importStabs/fullAnalysis (-Pfile overrides it)
+//   stabs.testBinaries   directory of STABS ELFs that RealBinariesTest parses (optional)
 
-def ghidraInstallDir = System.env.GHIDRA_INSTALL_DIR ?:
-	(project.hasProperty("GHIDRA_INSTALL_DIR") ? project.getProperty("GHIDRA_INSTALL_DIR")
-		: "/opt/homebrew/Cellar/ghidra/12.1.4/libexec")
+def localProps = new Properties()
+def localPropsFile = file("local.properties")
+if (localPropsFile.exists()) {
+	localPropsFile.withInputStream { localProps.load(it) }
+}
+def setting = { String name, String env = null ->
+	(env ? System.env[env] : null) ?: project.findProperty(name) ?: localProps.getProperty(name)
+}
+
+def ghidraInstallDir = setting("GHIDRA_INSTALL_DIR", "GHIDRA_INSTALL_DIR")
+if (!ghidraInstallDir) {
+	throw new GradleException("Set GHIDRA_INSTALL_DIR (environment, -P or local.properties)")
+}
 
 apply from: new File(ghidraInstallDir).getCanonicalPath() + "/support/buildExtension.gradle"
 
@@ -21,6 +34,10 @@ dependencies {
 
 test {
 	useJUnitPlatform()
+	def testBinaries = setting("stabs.testBinaries", "STABS_TEST_BINARIES")
+	if (testBinaries) {
+		systemProperty "stabs.testBinaries", testBinaries
+	}
 	maxHeapSize = "2g"
 	testLogging {
 		events "failed"
@@ -29,17 +46,28 @@ test {
 	}
 }
 
+// The ELF the stabs tasks run on: -Pfile, else stabs.file.
+def stabsFile = setting("file") ?: setting("stabs.file")
+ext.stabsArgs = {
+	(stabsFile ? [stabsFile] : []) + (project.findProperty("args")?.toString()?.tokenize() ?: [])
+}
+ext.requireFile = {
+	if (!stabsFile) {
+		throw new GradleException("Pass -Pfile=<elf> or set stabs.file in local.properties")
+	}
+}
+
 // Dumps the parsed STABS of a binary: ./gradlew dumpStabs -Pfile=<elf> [-Pargs="..."]
 tasks.register("dumpStabs", JavaExec) {
 	group = "stabs"
 	classpath = sourceSets.main.runtimeClasspath
 	mainClass = "stabs.tools.StabsDump"
-	args = [project.findProperty("file") ?: "${System.getProperty('user.home')}/mohaa-lnxclient-beta1/cgame.so"] +
-		(project.findProperty("args")?.toString()?.tokenize() ?: [])
+	args = stabsArgs()
+	doFirst { requireFile() }
 	maxHeapSize = "2g"
 }
 
-buildExtension.exclude 'CLAUDE.md', 'gradle/**', '.gitignore'
+buildExtension.exclude 'CLAUDE.md', 'CLAUDE.local.md', 'local.properties', 'gradle/**', '.gitignore'
 
 // Runs the analyzer headlessly on a throwaway import:
 // ./gradlew importStabs -Pfile=<elf> [-Pargs="<type or function names>"]
@@ -47,8 +75,8 @@ tasks.register("importStabs", JavaExec) {
 	group = "stabs"
 	classpath = sourceSets.test.runtimeClasspath
 	mainClass = "stabs.analysis.HeadlessImport"
-	args = [project.findProperty("file") ?: "${System.getProperty('user.home')}/mohaa-lnxclient-beta1/cgame.so"] +
-		(project.findProperty("args")?.toString()?.tokenize() ?: [])
+	args = stabsArgs()
+	doFirst { requireFile() }
 	maxHeapSize = "4g"
 }
 
@@ -58,7 +86,7 @@ tasks.register("fullAnalysis", JavaExec) {
 	group = "stabs"
 	classpath = sourceSets.test.runtimeClasspath
 	mainClass = "stabs.analysis.HeadlessFullAnalysis"
-	args = [project.findProperty("file") ?: "${System.getProperty('user.home')}/mohaa-lnxclient-beta1/cgame.so"] +
-		(project.findProperty("args")?.toString()?.tokenize() ?: [])
+	args = stabsArgs()
+	doFirst { requireFile() }
 	maxHeapSize = "4g"
 }

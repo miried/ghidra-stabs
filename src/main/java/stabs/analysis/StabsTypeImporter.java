@@ -312,7 +312,7 @@ final class StabsTypeImporter {
 	/**
 	 * @return a key that identifies a struct definition by name and layout, including member
 	 *         types a few levels deep: different nested classes such as
-	 *         {@code con_map<K,V>::Entry} are all just called {@code Entry}
+	 *         {@code Map<K,V>::Entry} are all just called {@code Entry}
 	 */
 	private static String layoutKey(StructType st, int depth) {
 		StringBuilder sb = new StringBuilder(st.isUnion() ? "u " : "s ");

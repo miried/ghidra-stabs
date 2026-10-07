@@ -200,7 +200,7 @@ class StabsParserTest {
 
 	@Test
 	void cppClassWithBaseVtableStaticsAndMethods() {
-		// Shapes taken from cgame.so: a class whose vptr lives in its base class
+		// Shapes seen in real g++ 2.95 output: a class whose vptr lives in its base class
 		StabsProgram p = parse(
 			N_LSYM, "int:t(0,1)=r(0,1);0020000000000;0017777777777;",
 			N_LSYM, "void:t(0,20)=(0,20)",

@@ -414,10 +414,10 @@ public final class StabsParser {
 	}
 
 	/**
-	 * g++ 2.95 names nested classes without their enclosing class: {@code con_map<K,V>::Entry}
+	 * g++ 2.95 names nested classes without their enclosing class: {@code Map<K,V>::Entry}
 	 * is just {@code Entry}. The mangled class in the physnames of its methods (g++ always
-	 * declares at least {@code operator=}) is qualified, though: {@code Q2t7con_map2Z..5Entry}.
-	 * Renames such classes to {@code con_map<K,V>::Entry}, taking the enclosing class's source
+	 * declares at least {@code operator=}) is qualified, though: {@code Q2t3Map2Z..5Entry}.
+	 * Renames such classes to {@code Map<K,V>::Entry}, taking the enclosing class's source
 	 * name from the class that has that mangling.
 	 */
 	private void qualifyNestedClasses() {
