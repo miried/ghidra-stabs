@@ -1,6 +1,7 @@
 package stabs.analysis;
 
 import java.util.*;
+import java.util.regex.Pattern;
 
 import ghidra.app.util.importer.MessageLog;
 import ghidra.app.util.NamespaceUtils;
@@ -84,19 +85,24 @@ final class StabsImporter {
 		monitor.setMessage("STABS: applying globals");
 		for (StabsProgram.Global g : stabs.globals()) {
 			monitor.checkCancelled();
-			applyGlobal(g.variable());
+			applyGlobal(g.variable(), program.getGlobalNamespace());
 		}
 		for (stabs.model.Function f : stabs.functions()) {
+			Function func = null;
 			for (stabs.model.Function.Local l : f.locals()) {
 				if (l.variable().storage() == Storage.LOCAL_STATIC) {
-					applyGlobal(l.variable());
+					if (func == null) {
+						func = program.getListing().getFunctionAt(addr(f.address()));
+					}
+					applyGlobal(l.variable(),
+						func != null ? func : program.getGlobalNamespace());
 				}
 			}
 		}
 		for (SType t : stabs.namedTypes()) {
 			if (t instanceof StructType st) {
 				for (StructType.StaticField sf : st.staticFields()) {
-					applyData(findSymbolAddress(sf.physname()), sf.type(), null);
+					applyData(findSymbolAddress(sf.physname()), sf.type(), null, null);
 				}
 			}
 		}
@@ -310,13 +316,13 @@ final class StabsImporter {
 
 	// ---------------------------------------------------------------- globals
 
-	private void applyGlobal(stabs.model.Variable v) {
+	private void applyGlobal(stabs.model.Variable v, Namespace ns) {
 		Address a = switch (v.storage()) {
 			case GLOBAL -> findSymbolAddress(v.name());
 			case STATIC, LOCAL_STATIC -> addr(v.value());
 			default -> null;
 		};
-		applyData(a, v.type(), v.name());
+		applyData(a, v.type(), v.name(), ns);
 	}
 
 	private Address findSymbolAddress(String name) {
@@ -331,7 +337,7 @@ final class StabsImporter {
 		return null;
 	}
 
-	private void applyData(Address a, SType type, String name) {
+	private void applyData(Address a, SType type, String name, Namespace ns) {
 		if (a == null || !program.getMemory().contains(a)) {
 			return;
 		}
@@ -347,12 +353,32 @@ final class StabsImporter {
 			DataUtilities.createData(program, a, dt, -1,
 				DataUtilities.ClearDataMode.CLEAR_ALL_CONFLICT_DATA);
 			globalsApplied++;
-			if (name != null && program.getSymbolTable().getPrimarySymbol(a) == null) {
-				program.getSymbolTable().createLabel(a, name, SourceType.IMPORTED);
+			if (name != null) {
+				applyDataName(a, name, ns);
 			}
 		}
 		catch (CodeUnitInsertionException | InvalidInputException e) {
 			fail("data " + name + " at " + a + ": " + e.getMessage());
+		}
+	}
+
+	/**
+	 * Labels data with its STABS name. gcc assembles function-local statics as {@code name.N}
+	 * (N is a label counter), so that ELF symbol is replaced as the primary name; any other
+	 * existing symbol is kept.
+	 */
+	private void applyDataName(Address a, String name, Namespace ns) throws InvalidInputException {
+		SymbolTable st = program.getSymbolTable();
+		Symbol primary = st.getPrimarySymbol(a);
+		if (primary != null && !primary.getName().matches(Pattern.quote(name) + "\\.\\d+")) {
+			return;
+		}
+		Symbol s = st.getSymbol(name, a, ns);
+		if (s == null) {
+			s = st.createLabel(a, name, ns, SourceType.IMPORTED);
+		}
+		if (!s.isPrimary()) {
+			s.setPrimary();
 		}
 	}
 

@@ -11,6 +11,7 @@ import ghidra.framework.Application;
 import ghidra.framework.HeadlessGhidraApplicationConfiguration;
 import ghidra.program.model.data.*;
 import ghidra.program.model.listing.*;
+import ghidra.program.model.symbol.Symbol;
 import ghidra.util.task.TaskMonitor;
 
 /**
@@ -75,6 +76,14 @@ public final class HeadlessImport {
 							f.getSignature().getPrototypeString(true),
 							f.hasCustomVariableStorage() ? "custom"
 									: f.getCallingConventionName());
+					}
+				}
+				for (Symbol s : program.getSymbolTable().getSymbols(q)) {
+					Data d = program.getListing().getDataAt(s.getAddress());
+					if (d != null) {
+						System.out.printf("%s  data %s : %s (primary %s)%n", s.getAddress(),
+							s.getName(true), d.getDataType().getPathName(),
+							program.getSymbolTable().getPrimarySymbol(s.getAddress()).getName(true));
 					}
 				}
 			}
