@@ -51,3 +51,14 @@ tasks.register("importStabs", JavaExec) {
 		(project.findProperty("args")?.toString()?.tokenize() ?: [])
 	maxHeapSize = "4g"
 }
+
+// Full auto analysis on a throwaway import, listing noreturn functions:
+// ./gradlew fullAnalysis -Pfile=<elf> [-Pargs="stabs|nostabs [functions to decompile]"]
+tasks.register("fullAnalysis", JavaExec) {
+	group = "stabs"
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "stabs.analysis.HeadlessFullAnalysis"
+	args = [project.findProperty("file") ?: "${System.getProperty('user.home')}/mohaa-lnxclient-beta1/cgame.so"] +
+		(project.findProperty("args")?.toString()?.tokenize() ?: [])
+	maxHeapSize = "4g"
+}

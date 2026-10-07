@@ -30,6 +30,18 @@ public class StabsAnalyzer extends AbstractAnalyzer {
 			"from .stab/.stabstr sections, as emitted by gcc 2.x.";
 	static final String STABS_LOADED_OPTION = "STABS Loaded";
 
+	private static final String OPTION_LOCALS = "Import Local Variables";
+	private static final String OPTION_LOCALS_DESC =
+		"Adds the stack-frame locals of each function, including those of inlined functions.";
+	private static final String OPTION_REGISTER_LOCALS = "Import Register Local Variables";
+	private static final String OPTION_REGISTER_LOCALS_DESC =
+		"Also names and types the decompiler's variables for locals that live in a register. " +
+			"Applied by the STABS Register Locals analyzer, which decompiles the functions " +
+			"that have any.";
+
+	private boolean importLocals = true;
+	private boolean importRegisterLocals = true;
+
 	private static final String STAB_SECTION = ".stab";
 	private static final String STABSTR_SECTION = ".stabstr";
 
@@ -41,7 +53,24 @@ public class StabsAnalyzer extends AbstractAnalyzer {
 	}
 
 	@Override
+	public void registerOptions(Options options, Program program) {
+		options.registerOption(OPTION_LOCALS, importLocals, null, OPTION_LOCALS_DESC);
+		options.registerOption(OPTION_REGISTER_LOCALS, importRegisterLocals, null,
+			OPTION_REGISTER_LOCALS_DESC);
+	}
+
+	@Override
+	public void optionsChanged(Options options, Program program) {
+		importLocals = options.getBoolean(OPTION_LOCALS, importLocals);
+		importRegisterLocals = options.getBoolean(OPTION_REGISTER_LOCALS, importRegisterLocals);
+	}
+
+	@Override
 	public boolean canAnalyze(Program program) {
+		return hasStabs(program);
+	}
+
+	static boolean hasStabs(Program program) {
 		Memory mem = program.getMemory();
 		return ElfLoader.ELF_NAME.equals(program.getExecutableFormat()) &&
 			mem.getBlock(STAB_SECTION) != null &&
@@ -80,7 +109,9 @@ public class StabsAnalyzer extends AbstractAnalyzer {
 			stabs.issues().stream().limit(50).forEach(i -> log.appendMsg("STABS: " + i));
 
 			StabsImporter importer = new StabsImporter(program, delta, log, monitor);
+			importer.setLocals(importLocals, importRegisterLocals);
 			importer.apply(stabs);
+			StabsRegisterLocals.put(program, importer.registerLocals());
 			Msg.info(this, importer.summary());
 			log.appendMsg(importer.summary());
 			info.setBoolean(STABS_LOADED_OPTION, true);

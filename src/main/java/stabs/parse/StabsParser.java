@@ -30,6 +30,10 @@ public final class StabsParser {
 	private long pendingSoValue;
 	private Function function;
 	private int blockDepth;
+	/** Index range of each open block's locals in {@code function.locals()}. */
+	private final Deque<int[]> openBlocks = new ArrayDeque<>();
+	/** Index of the first local that does not belong to a block yet. */
+	private int unblockedLocals;
 	private String currentSource;
 	private int entryIndex;
 
@@ -66,6 +70,7 @@ public final class StabsParser {
 			}
 		}
 		p.endFunction();
+		p.qualifyNestedClasses();
 		p.resolveCrossRefs();
 		return p.program;
 	}
@@ -129,8 +134,8 @@ public final class StabsParser {
 						e.desc(), currentSource));
 				}
 			}
-			case N_LBRAC -> blockDepth++;
-			case N_RBRAC -> blockDepth = Math.max(0, blockDepth - 1);
+			case N_LBRAC -> beginBlock(e.value());
+			case N_RBRAC -> endBlock(e.value());
 			case N_FUN -> {
 				if (str.isEmpty()) {
 					endFunction();
@@ -170,6 +175,40 @@ public final class StabsParser {
 	private void endFunction() {
 		function = null;
 		blockDepth = 0;
+		openBlocks.clear();
+		unblockedLocals = 0;
+	}
+
+	/**
+	 * gcc emits a block's variables right before its N_LBRAC, so the locals seen since the
+	 * last N_LBRAC/N_RBRAC belong to the block that starts here.
+	 */
+	private void beginBlock(long start) {
+		blockDepth++;
+		if (function == null) {
+			return;
+		}
+		List<Function.Local> locals = function.locals();
+		for (int i = unblockedLocals; i < locals.size(); i++) {
+			Function.Local l = locals.get(i);
+			locals.set(i, new Function.Local(l.variable(), blockDepth, start, -1));
+		}
+		openBlocks.push(new int[] { unblockedLocals, locals.size() });
+		unblockedLocals = locals.size();
+	}
+
+	private void endBlock(long end) {
+		blockDepth = Math.max(0, blockDepth - 1);
+		if (function == null || openBlocks.isEmpty()) {
+			return;
+		}
+		List<Function.Local> locals = function.locals();
+		int[] range = openBlocks.pop();
+		for (int i = range[0]; i < range[1]; i++) {
+			Function.Local l = locals.get(i);
+			locals.set(i, new Function.Local(l.variable(), l.blockDepth(), l.blockStart(), end));
+		}
+		unblockedLocals = locals.size();
 	}
 
 	private void issue(String message, String stab) {
@@ -258,8 +297,14 @@ public final class StabsParser {
 			case 'v' -> addParam(name, tp.parseType(null), Storage.REF_STACK, e.value());
 			case 'a' -> addParam(name, tp.parseType(null), Storage.REF_REGISTER, e.value());
 			case 'X', 'C' -> tp.parseType(null);
-			case 't' -> defineTypedef(name, tp);
-			case 'T' -> defineTag(name, tp);
+			case 't' -> {
+				int firstXref = crossRefs.size();
+				adoptCrossRefs(firstXref, defineTypedef(name, tp));
+			}
+			case 'T' -> {
+				int firstXref = crossRefs.size();
+				adoptCrossRefs(firstXref, defineTag(name, tp));
+			}
 			default -> throw new StabsParseException("unknown symbol descriptor '" + desc + "'");
 		}
 	}
@@ -277,7 +322,7 @@ public final class StabsParser {
 			return;
 		}
 		function.locals().add(
-			new Function.Local(new Variable(name, type, storage, value), blockDepth));
+			new Function.Local(new Variable(name, type, storage, value), blockDepth, -1, -1));
 	}
 
 	private void addParam(String name, SType type, Storage storage, long value) {
@@ -288,18 +333,27 @@ public final class StabsParser {
 		function.params().add(new Variable(name, type, storage, value));
 	}
 
+	/** Records the struct defined by a symbol as the scope of the cross references in it. */
+	private void adoptCrossRefs(int first, SType defined) {
+		if (defined instanceof StructType st) {
+			for (int i = first; i < crossRefs.size(); i++) {
+				crossRefs.get(i).setOwner(st);
+			}
+		}
+	}
+
 	/**
 	 * {@code name:t...}: names a type. A type defined right here (a builtin range, or an
 	 * anonymous struct/enum) takes the name; anything else becomes a {@link TypedefType}.
 	 */
-	private void defineTypedef(String name, TypeParser tp) {
+	private SType defineTypedef(String name, TypeParser tp) {
 		SType t = tp.parseType(name);
 		if (name == null) {
-			return;
+			return null;
 		}
 		if (!(t instanceof TypeRef slot) || slot.target() == null) {
 			registerNamed(new TypedefType(name, t));
-			return;
+			return null;
 		}
 		// look through aliases such as "foo_t:t(83,7)=(83,6)", where (83,6) is an anonymous
 		// "typedef struct {...}" or an enum defined by an earlier " :T(83,6)=e..."
@@ -324,16 +378,17 @@ public final class StabsParser {
 			slot.setTarget(td);
 			registerNamed(td);
 		}
+		return def;
 	}
 
 	/** {@code name:T...} or {@code name:Tt...}: a struct, union or enum tag. */
-	private void defineTag(String name, TypeParser tp) {
+	private SType defineTag(String name, TypeParser tp) {
 		if (tp.peek() == 't') {
 			tp.expect('t'); // C++: tag is also a typedef name, which is implicit
 		}
 		SType t = tp.parseType(name);
 		if (name == null) {
-			return;
+			return null;
 		}
 		SType def = t instanceof TypeRef slot ? slot.target() : t;
 		if (def instanceof StructType st) {
@@ -349,6 +404,7 @@ public final class StabsParser {
 			registerNamed(en);
 		}
 		// a CrossRefType here is a self reference ("fleep:T20=xsfleep:"), nothing to define
+		return def;
 	}
 
 	private void registerNamed(SType t) {
@@ -358,8 +414,82 @@ public final class StabsParser {
 	}
 
 	/**
-	 * Resolves {@code xs}/{@code xu}/{@code xe} references by tag name, preferring a definition
-	 * from the same compilation unit, then one from a unit of the same language, then any.
+	 * g++ 2.95 names nested classes without their enclosing class: {@code con_map<K,V>::Entry}
+	 * is just {@code Entry}. The mangled class in the physnames of its methods (g++ always
+	 * declares at least {@code operator=}) is qualified, though: {@code Q2t7con_map2Z..5Entry}.
+	 * Renames such classes to {@code con_map<K,V>::Entry}, taking the enclosing class's source
+	 * name from the class that has that mangling.
+	 */
+	private void qualifyNestedClasses() {
+		Map<String, StructType> byMangling = new HashMap<>();
+		Map<StructType, String> manglingOf = new IdentityHashMap<>();
+		for (SType t : program.namedTypes()) {
+			if (t instanceof StructType st && st.name() != null) {
+				String m = ownMangling(st);
+				if (m != null) {
+					manglingOf.put(st, m);
+					byMangling.putIfAbsent(m, st);
+				}
+			}
+		}
+		Map<StructType, String> qualified = new IdentityHashMap<>();
+		for (StructType st : manglingOf.keySet()) {
+			String q = qualifiedName(st, manglingOf, byMangling, qualified, 0);
+			if (q != null && !q.equals(st.name())) {
+				qualified.put(st, q);
+			}
+		}
+		qualified.forEach(StructType::setName);
+	}
+
+	private static String qualifiedName(StructType st, Map<StructType, String> manglingOf,
+			Map<String, StructType> byMangling, Map<StructType, String> done, int depth) {
+		String q = done.get(st);
+		if (q != null) {
+			return q;
+		}
+		String m = manglingOf.get(st);
+		List<String> parts = m != null ? GnuV2Names.qualifiedComponents(m) : null;
+		if (parts == null || parts.size() < 2 || depth > 20 ||
+			!st.name().equals(GnuV2Names.simpleName(parts.get(parts.size() - 1)))) {
+			return st.name();
+		}
+		String outerMangling = GnuV2Names.qualify(parts.subList(0, parts.size() - 1));
+		StructType outer = byMangling.get(outerMangling);
+		String outerName;
+		if (outer != null) {
+			outerName = qualifiedName(outer, manglingOf, byMangling, done, depth + 1);
+		}
+		else if (parts.size() == 2) {
+			outerName = GnuV2Names.simpleName(parts.get(0)); // e.g. a namespace
+		}
+		else {
+			outerName = null;
+		}
+		if (outerName == null) {
+			return st.name();
+		}
+		q = outerName + "::" + st.name();
+		done.put(st, q);
+		return q;
+	}
+
+	/** @return the mangled name of a class, from the physname of one of its methods */
+	private static String ownMangling(StructType st) {
+		for (StructType.Method m : st.methods()) {
+			String c = GnuV2Names.classOfPhysname(m.physname(), m.name());
+			if (c != null) {
+				return c;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Resolves {@code xs}/{@code xu}/{@code xe} references by tag name. Nested classes are
+	 * looked up from the scope of the struct containing the reference outwards, as in C++; then
+	 * a definition from the same compilation unit is preferred, then one from a unit of the
+	 * same language, then any.
 	 * <p>
 	 * The language check matters for names C and C++ both use: g++'s {@code bad_cast} derives
 	 * from {@code xsexception:}, which must not resolve to {@code <math.h>}'s
@@ -369,7 +499,8 @@ public final class StabsParser {
 		Map<String, List<SType>> byTag = new HashMap<>();
 		for (SType t : program.namedTypes()) {
 			if (t instanceof StructType || t instanceof EnumType) {
-				byTag.computeIfAbsent(t.name(), k -> new ArrayList<>()).add(t);
+				List<String> parts = GnuV2Names.splitQualified(t.name());
+				byTag.computeIfAbsent(parts.get(parts.size() - 1), k -> new ArrayList<>()).add(t);
 			}
 		}
 		for (CrossRefType x : crossRefs) {
@@ -377,6 +508,7 @@ public final class StabsParser {
 			if (candidates == null) {
 				continue;
 			}
+			List<String> scopes = scopes(x.owner());
 			SType best = null;
 			int bestScore = -1;
 			for (SType c : candidates) {
@@ -384,7 +516,8 @@ public final class StabsParser {
 					continue;
 				}
 				CompileUnit u = unitOf(c);
-				int score = (u == x.unit() ? 2 : 0) +
+				int score = 4 * scopeScore(c.name(), x.tag(), scopes) +
+					(u == x.unit() ? 2 : 0) +
 					(u != null && isCpp(u) == isCpp(x.unit()) ? 1 : 0);
 				if (score > bestScore) {
 					best = c;
@@ -393,6 +526,34 @@ public final class StabsParser {
 			}
 			x.setResolved(best);
 		}
+	}
+
+	/** @return the scopes in which a reference made inside {@code owner} is looked up */
+	private static List<String> scopes(StructType owner) {
+		List<String> scopes = new ArrayList<>();
+		if (owner != null && owner.name() != null) {
+			List<String> parts = GnuV2Names.splitQualified(owner.name());
+			for (int i = parts.size(); i > 0; i--) {
+				scopes.add(String.join("::", parts.subList(0, i)));
+			}
+		}
+		return scopes;
+	}
+
+	/**
+	 * @return how well a candidate's qualified name matches a lookup of {@code tag}: higher for
+	 *         an inner scope, 1 for a global name, 0 for a class nested elsewhere
+	 */
+	private static int scopeScore(String candidate, String tag, List<String> scopes) {
+		if (candidate.equals(tag)) {
+			return 1;
+		}
+		for (int i = 0; i < scopes.size(); i++) {
+			if (candidate.equals(scopes.get(i) + "::" + tag)) {
+				return 1 + scopes.size() - i;
+			}
+		}
+		return 0;
 	}
 
 	private static boolean kindMatches(CrossRefType x, SType t) {

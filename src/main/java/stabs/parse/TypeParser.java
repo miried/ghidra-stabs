@@ -688,11 +688,24 @@ final class TypeParser {
 			sb.append(name);
 		}
 		sb.append("__").append(cv);
-		if (tagName != null && !tagName.isEmpty() && tagName.indexOf('<') < 0) {
+		if (tagName != null && !tagName.isEmpty() && tagName.indexOf('<') < 0 &&
+			!startsWithOwnQualifiedName(argtypes, tagName)) {
 			sb.append(tagName.length()).append(tagName);
 		}
 		sb.append(argtypes);
 		return sb.toString();
+	}
+
+	/**
+	 * Nested classes are named without their enclosing class ({@code Entry}), but g++ spells
+	 * out the qualified class ({@code Q2t7con_map2ZiZi5Entry}) at the start of the argtypes.
+	 */
+	private static boolean startsWithOwnQualifiedName(String argtypes, String tagName) {
+		if (!argtypes.startsWith("Q")) {
+			return false;
+		}
+		int end = GnuV2Names.skipClass(argtypes, 0);
+		return end > 0 && argtypes.substring(0, end).endsWith(tagName.length() + tagName);
 	}
 
 	private void parseTilde(StructType st, TypeRef self) {

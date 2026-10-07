@@ -13,8 +13,14 @@ import java.util.List;
 public record Function(String name, boolean global, long address, SType returnType,
 		CompileUnit unit, List<Variable> params, List<Local> locals, List<Line> lines) {
 
-	/** A local variable or local type-less entry, with the block nesting depth it appeared at. */
-	public record Local(Variable variable, int blockDepth) {
+	/**
+	 * A local variable with the lexical block it belongs to.
+	 *
+	 * @param blockDepth nesting depth of the block, 1 for the function body
+	 * @param blockStart start of the block relative to the function, -1 if unknown
+	 * @param blockEnd end of the block relative to the function, -1 if unknown
+	 */
+	public record Local(Variable variable, int blockDepth, long blockStart, long blockEnd) {
 	}
 
 	/** A line number entry; {@code address} is absolute (link-time). */

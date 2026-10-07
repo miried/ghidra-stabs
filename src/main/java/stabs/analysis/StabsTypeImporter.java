@@ -357,8 +357,15 @@ final class StabsTypeImporter {
 		}
 		String name = anon ? (st.isUnion() ? "_anon_union_" : "_anon_struct_") + (++anonCount)
 				: uniqueName(st.name());
-		Composite dt = st.isUnion() ? new UnionDataType(ROOT, name, dtm)
-				: new StructureDataType(ROOT, name, (int) st.size(), dtm);
+		// nested classes go into a category named after the enclosing class, as with DWARF
+		CategoryPath cat = ROOT;
+		List<String> parts = GnuV2Names.splitQualified(name);
+		for (int i = 0; i < parts.size() - 1; i++) {
+			cat = new CategoryPath(cat, parts.get(i));
+		}
+		name = parts.get(parts.size() - 1);
+		Composite dt = st.isUnion() ? new UnionDataType(cat, name, dtm)
+				: new StructureDataType(cat, name, (int) st.size(), dtm);
 		converted.put(st, dt);
 		if (key != null) {
 			byLayout.put(key, dt);

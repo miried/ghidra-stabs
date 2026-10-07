@@ -153,6 +153,33 @@ class StabsParserTest {
 	}
 
 	@Test
+	void nestedClassesAreQualifiedAndLookedUpFromTheirScope() {
+		// g++ 2.95 names both mapA<int>::Entry and setB<int>::Entry just "Entry"
+		StabsProgram p = parse(
+			N_LSYM, "int:t(0,1)=r(0,1);-2147483648;2147483647;",
+			N_LSYM, "mapA<int>:Tt(0,2)=s4table:/0(0,3)=*(0,4)=xsEntry:,0,32;" +
+				"__as::(0,5)=##(0,6)=&(0,2);:t4mapA1ZiRCt4mapA1Zi;2A.;;",
+			N_LSYM, "setB<int>:Tt(0,7)=s4table:/0(0,8)=*(0,9)=xsEntry:,0,32;" +
+				"__as::(0,10)=##(0,11)=&(0,7);:t4setB1ZiRCt4setB1Zi;2A.;;",
+			N_LSYM, "Entry:Tt(0,12)=s4key:(0,1),0,32;" +
+				"__as::(0,13)=##(0,14)=&(0,12);:Q2t4mapA1Zi5EntryRCQ2t4mapA1Zi5Entry;2A.;;",
+			N_LSYM, "Entry:Tt(0,15)=s8key:(0,1),0,32;next:(0,1),32,32;" +
+				"__as::(0,16)=##(0,17)=&(0,15);:Q2t4setB1Zi5EntryRCQ2t4setB1Zi5Entry;2A.;;");
+		StructType a = assertInstanceOf(StructType.class, named(p, "mapA<int>::Entry"));
+		StructType b = assertInstanceOf(StructType.class, named(p, "setB<int>::Entry"));
+		assertEquals("__as__Q2t4mapA1Zi5EntryRCQ2t4mapA1Zi5Entry", a.methods().get(0).physname());
+
+		StructType mapA = assertInstanceOf(StructType.class, named(p, "mapA<int>"));
+		StructType setB = assertInstanceOf(StructType.class, named(p, "setB<int>"));
+		assertSame(a, pointee(mapA.fields().get(0).type()));
+		assertSame(b, pointee(setB.fields().get(0).type()));
+	}
+
+	private static SType pointee(SType t) {
+		return assertInstanceOf(PointerType.class, t.resolve()).target().resolve();
+	}
+
+	@Test
 	void enumType() {
 		StabsProgram p = parse(N_LSYM, "color_t:T(0,1)=eRED:0,GREEN:1,BLUE:-2,;");
 		EnumType e = assertInstanceOf(EnumType.class, named(p, "color_t"));
@@ -227,6 +254,9 @@ class StabsParserTest {
 			N_LSYM, "sum:(0,1)", -4L,
 			N_RSYM, "i:r(0,1)", 1L,
 			N_LBRAC, "", 3L,
+			N_LSYM, "t:(0,1)", -8L,
+			N_LBRAC, "", 6L,
+			N_RBRAC, "", 10L,
 			N_RBRAC, "", 20L,
 			N_FUN, "helper:f(0,1)", 0x1040L,
 			N_STSYM, "counter:S(0,1)", 0x2000L,
@@ -237,8 +267,13 @@ class StabsParserTest {
 		assertEquals(0x1010, add.address());
 		assertEquals(List.of("a", "b"), add.params().stream().map(Variable::name).toList());
 		assertEquals(12, add.params().get(1).value());
-		assertEquals(2, add.locals().size());
+		assertEquals(3, add.locals().size());
 		assertEquals(Variable.Storage.REGISTER, add.locals().get(1).variable().storage());
+		// a block's variables come right before its N_LBRAC
+		assertEquals(new Function.Local(add.locals().get(0).variable(), 1, 3, 20),
+			add.locals().get(0));
+		assertEquals(new Function.Local(add.locals().get(2).variable(), 2, 6, 10),
+			add.locals().get(2));
 		assertEquals(0x1013, add.lines().get(0).address());
 		assertFalse(p.functions().get(1).global());
 		assertEquals(List.of("counter", "total"),

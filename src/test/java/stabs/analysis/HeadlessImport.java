@@ -67,8 +67,13 @@ public final class HeadlessImport {
 
 			for (int i = 1; i < args.length; i++) {
 				String q = args[i];
-				if (cat != null && cat.getDataType(q) != null) {
-					print(cat.getDataType(q));
+				// nested classes live in subcategories (/STABS/con_set<...>/Entry)
+				for (Iterator<DataType> it = dtm.getAllDataTypes(); it.hasNext();) {
+					DataType dt = it.next();
+					if (dt.getName().equals(q) &&
+						dt.getCategoryPath().isAncestorOrSelf(StabsTypeImporter.ROOT)) {
+						print(dt);
+					}
 				}
 				for (Function f : program.getFunctionManager().getFunctions(true)) {
 					if (f.getName(true).contains(q)) {
@@ -76,6 +81,11 @@ public final class HeadlessImport {
 							f.getSignature().getPrototypeString(true),
 							f.hasCustomVariableStorage() ? "custom"
 									: f.getCallingConventionName());
+						for (Variable v : f.getLocalVariables()) {
+							System.out.printf("    local %-24s %-12s first use +%x%n",
+								v.getDataType().getDisplayName() + " " + v.getName(),
+								v.getVariableStorage(), v.getFirstUseOffset());
+						}
 					}
 				}
 				for (Symbol s : program.getSymbolTable().getSymbols(q)) {

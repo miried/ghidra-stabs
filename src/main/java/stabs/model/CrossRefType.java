@@ -13,6 +13,7 @@ public final class CrossRefType implements SType {
 	private final String tag;
 	private final CompileUnit unit;
 	private SType resolved;
+	private StructType owner;
 
 	public CrossRefType(Kind kind, String tag, CompileUnit unit) {
 		this.kind = kind;
@@ -39,6 +40,18 @@ public final class CrossRefType implements SType {
 
 	public void setResolved(SType resolved) {
 		this.resolved = resolved;
+	}
+
+	/**
+	 * @return the struct whose definition contains this reference, or null; nested classes are
+	 *         looked up from its scope, the way C++ name lookup works
+	 */
+	public StructType owner() {
+		return owner;
+	}
+
+	public void setOwner(StructType owner) {
+		this.owner = owner;
 	}
 
 	@Override

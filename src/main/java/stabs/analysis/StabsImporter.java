@@ -8,6 +8,7 @@ import ghidra.app.util.NamespaceUtils;
 import ghidra.program.model.address.*;
 import ghidra.program.database.function.OverlappingFunctionException;
 import ghidra.program.model.data.*;
+import ghidra.program.model.lang.Register;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Variable;
@@ -27,6 +28,9 @@ import stabs.model.Variable.Storage;
  */
 final class StabsImporter {
 	private static final String CALLING_CONVENTION = "__cdecl";
+	/** gcc 2.95's stabs register numbers on i386 Linux ({@code config/i386/linux.h}). */
+	private static final String[] REGISTERS =
+		{ "EAX", "ECX", "EDX", "EBX", "ESP", "EBP", "ESI", "EDI" };
 
 	private final Program program;
 	private final long delta;
@@ -36,6 +40,11 @@ final class StabsImporter {
 	private final AddressSpace space;
 	private final Map<String, Owner> methodsByPhysname = new HashMap<>();
 	private final Set<String> passedByReference = new HashSet<>();
+	/** Template instances and inline functions are emitted by every unit that uses them. */
+	private final Set<Address> functionsWithLocals = new HashSet<>();
+	private boolean importLocals = true;
+	private boolean importRegisterLocals = true;
+	private final List<StabsRegisterLocals.Pending> registerLocals = new ArrayList<>();
 
 	private record Owner(StructType type, Method method) {
 	}
@@ -44,6 +53,9 @@ final class StabsImporter {
 	int functionsCreated;
 	int customStorage;
 	int globalsApplied;
+	int localsApplied;
+	int localsSkipped;
+	private final Map<String, Integer> skipReasons = new TreeMap<>();
 	int failures;
 
 	StabsImporter(Program program, long delta, MessageLog log, TaskMonitor monitor) {
@@ -54,6 +66,16 @@ final class StabsImporter {
 		this.types = new StabsTypeImporter(program.getDataTypeManager(),
 			program.getMemory().isBigEndian(), log);
 		this.space = program.getAddressFactory().getDefaultAddressSpace();
+	}
+
+	void setLocals(boolean stack, boolean register) {
+		importLocals = stack;
+		importRegisterLocals = register;
+	}
+
+	/** @return the register locals, to be applied once the code is disassembled */
+	List<StabsRegisterLocals.Pending> registerLocals() {
+		return registerLocals;
 	}
 
 	void apply(StabsProgram stabs) throws CancelledException {
@@ -110,9 +132,11 @@ final class StabsImporter {
 
 	String summary() {
 		return String.format("STABS applied: %d function signatures (%d created, %d with " +
-			"custom storage), %d global variables, %d type warnings, %d other warnings",
-			functionsApplied, functionsCreated, customStorage, globalsApplied, types.failures(),
-			failures);
+			"custom storage), %d stack local variables (%d skipped), %d register locals " +
+			"pending, %d global variables, %d type warnings, %d other warnings",
+			functionsApplied, functionsCreated, customStorage, localsApplied, localsSkipped,
+			registerLocals.size(), globalsApplied, types.failures(), failures) +
+			(skipReasons.isEmpty() ? "" : ", stack locals skipped: " + skipReasons);
 	}
 
 	private Address addr(long linkTimeAddress) {
@@ -161,6 +185,9 @@ final class StabsImporter {
 		}
 		applyName(func, f);
 		applySignature(func, f);
+		if (importLocals && functionsWithLocals.add(entry)) {
+			applyLocals(func, f);
+		}
 		functionsApplied++;
 	}
 
@@ -201,7 +228,9 @@ final class StabsImporter {
 	}
 
 	private static String methodName(String cls, Method m) {
-		String bare = cls.contains("<") ? cls.substring(0, cls.indexOf('<')) : cls;
+		List<String> parts = GnuV2Names.splitQualified(cls);
+		String bare = parts.get(parts.size() - 1);
+		bare = bare.contains("<") ? bare.substring(0, bare.indexOf('<')) : bare;
 		if (GnuV2Names.isDestructor(m.physname())) {
 			return "~" + bare;
 		}
@@ -212,13 +241,23 @@ final class StabsImporter {
 		return op != null ? op : m.name();
 	}
 
+	/** @return the class namespace for a (possibly nested, {@code A::B}) class name */
 	private Namespace classNamespace(String cls)
+			throws InvalidInputException, DuplicateNameException {
+		Namespace ns = program.getGlobalNamespace();
+		for (String part : GnuV2Names.splitQualified(cls)) {
+			ns = classNamespace(ns, part);
+		}
+		return ns;
+	}
+
+	private Namespace classNamespace(Namespace parent, String cls)
 			throws InvalidInputException, DuplicateNameException {
 		String name = SymbolUtilities.replaceInvalidChars(cls, true);
 		SymbolTable st = program.getSymbolTable();
-		Namespace ns = st.getNamespace(name, program.getGlobalNamespace());
+		Namespace ns = st.getNamespace(name, parent);
 		if (ns == null) {
-			return st.createClass(program.getGlobalNamespace(), name, SourceType.IMPORTED);
+			return st.createClass(parent, name, SourceType.IMPORTED);
 		}
 		if (!(ns instanceof GhidraClass) && ns.getSymbol().getSymbolType() == SymbolType.NAMESPACE) {
 			return NamespaceUtils.convertNamespaceToClass(ns);
@@ -293,6 +332,108 @@ final class StabsImporter {
 			new ReturnParameterImpl(customRet, retStorage, true, program), custom,
 			FunctionUpdateType.CUSTOM_STORAGE, true, SourceType.IMPORTED);
 		customStorage++;
+	}
+
+	/**
+	 * Adds the stack locals, which hold the variable for the whole function, and collects the
+	 * register locals for {@link StabsRegisterLocals}. A local that conflicts with an earlier
+	 * one (e.g. a sibling block reusing a stack slot) is skipped: gcc emits the outer blocks
+	 * first.
+	 */
+	private void applyLocals(Function func, stabs.model.Function f) {
+		Set<String> names = new HashSet<>();
+		for (Variable v : func.getAllVariables()) {
+			names.add(v.getName());
+		}
+		Set<String> paramNames = new HashSet<>();
+		f.params().forEach(p -> paramNames.add(p.name()));
+		for (stabs.model.Function.Local l : f.locals()) {
+			stabs.model.Variable v = l.variable();
+			if (v.name() == null || v.storage() == Storage.REGISTER && paramNames.contains(
+				v.name())) {
+				continue; // the register a parameter lives in, see dbxout_reg_parms
+			}
+			if (v.storage() != Storage.STACK &&
+				(v.storage() != Storage.REGISTER || !importRegisterLocals)) {
+				continue;
+			}
+			DataType dt = types.get(v.type());
+			if (dt == null || dt.getLength() <= 0) {
+				continue;
+			}
+			if (v.storage() == Storage.REGISTER) {
+				Register reg = register(v.value(), dt.getLength());
+				if (reg != null) { // %st(n) has no fixed location; long long is a register pair
+					registerLocals.add(new StabsRegisterLocals.Pending(func.getEntryPoint(),
+						v.name(), dt, reg, l.blockStart(), l.blockEnd()));
+				}
+				continue;
+			}
+			try {
+				// STABS frame offsets are relative to %ebp, see applySignature
+				VariableStorage storage =
+					new VariableStorage(program, (int) v.value() - 4, dt.getLength());
+				removeAnalysisVariables(func, storage);
+				String name = v.name();
+				for (int n = 1; names.contains(name); n++) {
+					name = v.name() + "_" + n;
+				}
+				LocalVariableImpl local = new LocalVariableImpl(name, 0, dt, storage, false,
+					program, SourceType.IMPORTED);
+				VariableUtilities.checkVariableConflict(func, local, storage, false);
+				func.addLocalVariable(local, SourceType.IMPORTED);
+				names.add(name);
+				localsApplied++;
+			}
+			catch (InvalidInputException | DuplicateNameException | IllegalArgumentException e) {
+				localsSkipped++;
+				skipReasons.merge(stackSkipReason(func, v.name(), dt, (int) v.value() - 4), 1,
+					Integer::sum);
+			}
+		}
+	}
+
+	/**
+	 * @return why a stack local conflicts with the variables already there: a copy of the same
+	 *         variable (an inlined function's, emitted once per expansion), a parameter it
+	 *         aliases (an inlined function's parameter), or another local sharing the slot
+	 */
+	private static String stackSkipReason(Function func, String name, DataType dt, int offset) {
+		for (Variable o : func.getAllVariables()) {
+			if (o.isStackVariable() && o.getStackOffset() < offset + dt.getLength() &&
+				offset < o.getStackOffset() + o.getLength()) {
+				if (o.getName().replaceAll("_\\d+$", "").equals(name) &&
+					o.getDataType().isEquivalent(dt)) {
+					return "copy";
+				}
+				return o instanceof Parameter ? "aliases parameter" : "slot shared";
+			}
+		}
+		return "other";
+	}
+
+	/** @return the register for a stabs register number holding a value of {@code size} */
+	private Register register(long regno, int size) {
+		if (regno < 0 || regno >= REGISTERS.length) {
+			return null; // %st(n): no fixed location
+		}
+		Register reg = program.getRegister(REGISTERS[(int) regno]);
+		if (reg == null || size > reg.getMinimumByteSize()) {
+			return null;
+		}
+		return size == reg.getMinimumByteSize() ? reg
+				: program.getRegister(reg.getAddress(), size);
+	}
+
+	/** Removes variables that auto analysis created where a STABS local is going to go. */
+	static void removeAnalysisVariables(Function func, VariableStorage storage) {
+		for (Variable v : func.getLocalVariables()) {
+			SourceType src = v.getSource();
+			if ((src == SourceType.DEFAULT || src == SourceType.ANALYSIS) &&
+				v.getVariableStorage().intersects(storage)) {
+				func.removeVariable(v);
+			}
+		}
 	}
 
 	private static boolean matchesStabs(Function func, List<Integer> offsets) {
