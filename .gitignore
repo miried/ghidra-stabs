@@ -1,0 +1,6 @@
+.gradle/
+build/
+dist/
+bin/
+lib/*.jar
+CLAUDE.local.md

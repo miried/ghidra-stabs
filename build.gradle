@@ -1,0 +1,53 @@
+// Builds the STABS Ghidra extension against a local Ghidra installation.
+//
+// GHIDRA_INSTALL_DIR is taken from the environment, then from -PGHIDRA_INSTALL_DIR,
+// and defaults to the Homebrew install.
+
+def ghidraInstallDir = System.env.GHIDRA_INSTALL_DIR ?:
+	(project.hasProperty("GHIDRA_INSTALL_DIR") ? project.getProperty("GHIDRA_INSTALL_DIR")
+		: "/opt/homebrew/Cellar/ghidra/12.1.4/libexec")
+
+apply from: new File(ghidraInstallDir).getCanonicalPath() + "/support/buildExtension.gradle"
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	testImplementation platform("org.junit:junit-bom:5.11.4")
+	testImplementation "org.junit.jupiter:junit-jupiter"
+	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+test {
+	useJUnitPlatform()
+	maxHeapSize = "2g"
+	testLogging {
+		events "failed"
+		exceptionFormat "full"
+		showStandardStreams = true
+	}
+}
+
+// Dumps the parsed STABS of a binary: ./gradlew dumpStabs -Pfile=<elf> [-Pargs="..."]
+tasks.register("dumpStabs", JavaExec) {
+	group = "stabs"
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = "stabs.tools.StabsDump"
+	args = [project.findProperty("file") ?: "${System.getProperty('user.home')}/mohaa-lnxclient-beta1/cgame.so"] +
+		(project.findProperty("args")?.toString()?.tokenize() ?: [])
+	maxHeapSize = "2g"
+}
+
+buildExtension.exclude 'CLAUDE.md', 'gradle/**', '.gitignore'
+
+// Runs the analyzer headlessly on a throwaway import:
+// ./gradlew importStabs -Pfile=<elf> [-Pargs="<type or function names>"]
+tasks.register("importStabs", JavaExec) {
+	group = "stabs"
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "stabs.analysis.HeadlessImport"
+	args = [project.findProperty("file") ?: "${System.getProperty('user.home')}/mohaa-lnxclient-beta1/cgame.so"] +
+		(project.findProperty("args")?.toString()?.tokenize() ?: [])
+	maxHeapSize = "4g"
+}
